@@ -56,7 +56,7 @@ def find_milestone(repo, title):
     pat = re.search("v([0-9.]+)", title)
     if not pat:
         return None
-    version = pat.group(1)
+    version = pat[1]
     for milestone in repo.get_milestones():
         if version in milestone.title:
             return milestone
@@ -64,10 +64,10 @@ def find_milestone(repo, title):
 
 def get_issue_first_label(issue):
     """Get the first label from issue, if no labels, return empty string."""
-    for label in issue.get_labels():
-        if label.name in docmap:
-            return label.name
-    return ""
+    return next(
+        (label.name for label in issue.get_labels() if label.name in docmap),
+        "",
+    )
 
 
 def generate_msg(desc_mapping):
