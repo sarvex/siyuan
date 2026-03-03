@@ -78,7 +78,7 @@ left:${left || "auto"};top:${top || "auto"}">
         } else {
             setTimeout(() => {
                 this.element.classList.add("b3-dialog--open");
-            });
+            }, Constants.TIMEOUT_OPENDIALOG);
         }
         /// #if !MOBILE
         moveResize(this.element.querySelector(".b3-dialog__container"), options.resizeCallback);
@@ -86,39 +86,47 @@ left:${left || "auto"};top:${top || "auto"}">
     }
 
     public destroy(options?: IObject) {
-        // av 修改列头emoji后点击关闭emoji图标
-        if ((this.element.querySelector(".b3-dialog") as HTMLElement).style.zIndex < window.siyuan.menus.menu.element.style.zIndex) {
-            // https://github.com/siyuan-note/siyuan/issues/6783
-            window.siyuan.menus.menu.remove();
-        }
-        this.element.remove();
-        if (this.destroyCallback) {
-            this.destroyCallback(options);
-        }
-        window.siyuan.dialogs.find((item, index) => {
-            if (item.id === this.id) {
-                window.siyuan.dialogs.splice(index, 1);
-                return true;
+        this.element.classList.remove("b3-dialog--open");
+        setTimeout(() => {
+            // av 修改列头emoji后点击关闭emoji图标
+            if ((this.element.querySelector(".b3-dialog") as HTMLElement).style.zIndex < window.siyuan.menus.menu.element.style.zIndex) {
+                // https://github.com/siyuan-note/siyuan/issues/6783
+                window.siyuan.menus.menu.remove();
             }
-        });
-        // https://github.com/siyuan-note/siyuan/issues/10475
-        document.getElementById("drag")?.classList.remove("fn__hidden");
+            this.element.remove();
+            if (this.destroyCallback) {
+                this.destroyCallback(options);
+            }
+            window.siyuan.dialogs.find((item, index) => {
+                if (item.id === this.id) {
+                    window.siyuan.dialogs.splice(index, 1);
+                    return true;
+                }
+            });
+            // https://github.com/siyuan-note/siyuan/issues/10475
+            document.getElementById("drag")?.classList.remove("fn__hidden");
+        }, Constants.TIMEOUT_DBLCLICK);
     }
 
     public bindInput(inputElement: HTMLInputElement | HTMLTextAreaElement, enterEvent?: () => void, bindEnter = true) {
         inputElement.focus();
+        let timeStamp: number;
         inputElement.addEventListener("keydown", (event: KeyboardEvent) => {
             if (event.isComposing) {
                 event.preventDefault();
                 return;
             }
-            if (event.key === "Escape") {
+            if (event.key === "Escape" && !event.repeat) {
                 this.destroy();
                 event.preventDefault();
                 event.stopPropagation();
                 return;
             }
-            if (!event.shiftKey && isNotCtrl(event) && event.key === "Enter" && enterEvent && bindEnter) {
+            if (!event.shiftKey && isNotCtrl(event) && event.key === "Enter" && enterEvent && bindEnter && !event.repeat) {
+                if (timeStamp && event.timeStamp - timeStamp < Constants.TIMEOUT_INPUT) {
+                    return;
+                }
+                timeStamp = event.timeStamp;
                 enterEvent();
                 event.preventDefault();
                 event.stopPropagation();

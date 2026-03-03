@@ -18,7 +18,6 @@ package api
 
 import (
 	"fmt"
-	"github.com/siyuan-note/siyuan/kernel/util"
 	"math"
 	"net/http"
 	"regexp"
@@ -28,6 +27,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/siyuan-note/siyuan/kernel/model"
+	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
 type ColorScheme struct {
@@ -164,6 +164,10 @@ func getDynamicIcon(c *gin.Context) {
 		svg = generateTypeOneSVG(color, lang, dateInfo)
 	}
 
+	if !model.Conf.Editor.AllowSVGScript {
+		svg = util.RemoveScriptsInSVG(svg)
+	}
+
 	c.Header("Content-Type", "image/svg+xml")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Pragma", "no-cache")
@@ -238,8 +242,8 @@ func getDateInfo(dateStr string, lang string, weekdayType string) map[string]int
 			weekdayStr = date.Format("Mon")
 		}
 	}
-	// Calculate week number
-	_, weekNum := date.ISOWeek()
+	// Calculate week number and ISO year
+	isoYear, weekNum := date.ISOWeek()
 	weekNumStr := fmt.Sprintf("%dW", weekNum)
 
 	switch lang {
@@ -259,6 +263,7 @@ func getDateInfo(dateStr string, lang string, weekdayType string) map[string]int
 
 	return map[string]interface{}{
 		"year":      year,
+		"isoYear":   isoYear,
 		"month":     month,
 		"day":       day,
 		"date":      fmt.Sprintf("%02d-%02d", date.Month(), date.Day()),
@@ -399,7 +404,7 @@ func generateTypeFiveSVG(color string, lang string, dateInfo map[string]interfac
         <text transform="translate(22 146.5)" style="fill: #fff;font-size: 120px; font-family: -apple-system, BlinkMacSystemFont, 'Noto Sans', 'Noto Sans CJK SC', 'Microsoft YaHei'; ">%d</text>
         <text x="50%%" y="410.5" style="fill: #66757f;font-size: 200px;text-anchor: middle;font-family: -apple-system, BlinkMacSystemFont, 'Noto Sans', 'Noto Sans CJK SC', 'Microsoft YaHei'; ">%s</text>
     </svg>
-    `, colorScheme.Primary, colorScheme.Secondary, dateInfo["year"], dateInfo["week"])
+    `, colorScheme.Primary, colorScheme.Secondary, dateInfo["isoYear"], dateInfo["week"])
 }
 
 // Type 6: 仅显示星期

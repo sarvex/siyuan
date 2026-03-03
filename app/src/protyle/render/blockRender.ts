@@ -1,4 +1,4 @@
-import {hasClosestByAttribute, hasTopClosestByClassName} from "../util/hasClosest";
+import {hasClosestByAttribute} from "../util/hasClosest";
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {processRender} from "../util/processCode";
 import {highlightRender} from "./highlightRender";
@@ -24,10 +24,14 @@ export const blockRender = (protyle: IProtyle, element: Element, top?: number) =
         // 需置于请求返回前，否则快速滚动会导致重复加载 https://ld246.com/article/1666857862494?r=88250
         item.setAttribute("data-render", "true");
         genRenderFrame(item);
-        const embedElement = item.querySelector(".protyle-wysiwyg__embed");
-        if (embedElement) {
+        if (item.childElementCount > 3) {
             item.style.height = (item.clientHeight - 4) + "px"; // 减少抖动 https://ld246.com/article/1668669380171
-            embedElement.remove();
+            for (let i = 1; i < item.children.length - 1; i++) {
+                if (!item.children[i].classList.contains("protyle-cursor")) {
+                    item.children[i].remove();
+                    i--;
+                }
+            }
         }
         const content = Lute.UnEscapeHTMLStr(item.getAttribute("data-content"));
         let breadcrumb: boolean | string = item.getAttribute("breadcrumb");
@@ -36,11 +40,7 @@ export const blockRender = (protyle: IProtyle, element: Element, top?: number) =
         } else {
             breadcrumb = window.siyuan.config.editor.embedBlockBreadcrumb;
         }
-        // https://github.com/siyuan-note/siyuan/issues/7575
-        const sbElement = hasTopClosestByClassName(item, "sb");
-        if (sbElement) {
-            breadcrumb = false;
-        }
+
         if (content.startsWith("//!js")) {
             try {
                 const includeIDs = new Function(
@@ -48,14 +48,14 @@ export const blockRender = (protyle: IProtyle, element: Element, top?: number) =
                     "item",
                     "protyle",
                     "top",
-                    content)(fetchSyncPost,item,protyle,top);
+                    content)(fetchSyncPost, item, protyle, top);
                 if (includeIDs instanceof Promise) {
                     includeIDs.then((promiseIds) => {
                         if (Array.isArray(promiseIds)) {
                             fetchPost("/api/search/getEmbedBlock", {
                                 embedBlockID: item.getAttribute("data-node-id"),
                                 includeIDs: promiseIds,
-                                headingMode: item.getAttribute("custom-heading-mode") === "1" ? 1 : 0,
+                                headingMode: ["0", "1", "2"].includes(item.getAttribute("custom-heading-mode")) ? parseInt(item.getAttribute("custom-heading-mode")) : window.siyuan.config.editor.headingEmbedMode,
                                 breadcrumb
                             }, (response) => {
                                 renderEmbed(response.data.blocks || [], protyle, item, top);
@@ -63,14 +63,14 @@ export const blockRender = (protyle: IProtyle, element: Element, top?: number) =
                         } else {
                             return;
                         }
-                    }).catch(() => {
-                        renderEmbed([], protyle, item, top);
+                    }).catch((e) => {
+                        renderEmbed([], protyle, item, top, e);
                     });
                 } else if (Array.isArray(includeIDs)) {
                     fetchPost("/api/search/getEmbedBlock", {
                         embedBlockID: item.getAttribute("data-node-id"),
                         includeIDs,
-                        headingMode: item.getAttribute("custom-heading-mode") === "1" ? 1 : 0,
+                        headingMode: ["0", "1", "2"].includes(item.getAttribute("custom-heading-mode")) ? parseInt(item.getAttribute("custom-heading-mode")) : window.siyuan.config.editor.headingEmbedMode,
                         breadcrumb
                     }, (response) => {
                         renderEmbed(response.data.blocks || [], protyle, item, top);
@@ -79,13 +79,13 @@ export const blockRender = (protyle: IProtyle, element: Element, top?: number) =
                     return;
                 }
             } catch (e) {
-                renderEmbed([], protyle, item, top);
+                renderEmbed([], protyle, item, top, e);
             }
         } else {
             fetchPost("/api/search/searchEmbedBlock", {
                 embedBlockID: item.getAttribute("data-node-id"),
                 stmt: content,
-                headingMode: item.getAttribute("custom-heading-mode") === "1" ? 1 : 0,
+                headingMode: ["0", "1", "2"].includes(item.getAttribute("custom-heading-mode")) ? parseInt(item.getAttribute("custom-heading-mode")) : window.siyuan.config.editor.headingEmbedMode,
                 excludeIDs: [item.getAttribute("data-node-id"), protyle.block.rootID],
                 breadcrumb
             }, (response) => {
@@ -98,7 +98,7 @@ export const blockRender = (protyle: IProtyle, element: Element, top?: number) =
 const renderEmbed = (blocks: {
     block: IBlock,
     blockPaths: IBreadcrumb[]
-}[], protyle: IProtyle, item: HTMLElement, top?: number) => {
+}[], protyle: IProtyle, item: HTMLElement, top?: number, errorTip?: string) => {
     const rotateElement = item.querySelector(".fn__rotate");
     if (rotateElement) {
         rotateElement.classList.remove("fn__rotate");
@@ -115,7 +115,7 @@ const renderEmbed = (blocks: {
         item.firstElementChild.insertAdjacentHTML("afterend", html);
         improveBreadcrumbAppearance(item.querySelector(".protyle-wysiwyg__embed"));
     } else {
-        item.firstElementChild.insertAdjacentHTML("afterend", `<div class="ft__smaller ft__secondary b3-form__space--small" contenteditable="false">${window.siyuan.languages.refExpired}</div>`);
+        item.firstElementChild.insertAdjacentHTML("afterend", `<div class="protyle-wysiwyg__embed ft__smaller ft__secondary b3-form__space--small" contenteditable="false">${errorTip || window.siyuan.languages.refExpired}</div>`);
     }
 
     processRender(item);

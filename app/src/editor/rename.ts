@@ -14,7 +14,7 @@ import {getAllModels} from "../layout/getAll";
 import {getAllEditor} from "../layout/getAll";
 
 export const validateName = (name: string, targetElement?: HTMLElement) => {
-    if (/\r\n|\r|\n|\u2028|\u2029|\t|\//.test(name)) {
+    if (/\r\n|\r|\n|\u2028|\u2029|\t/.test(name)) {
         if (targetElement) {
             showTooltip(window.siyuan.languages.fileNameRule, targetElement, "error");
         } else {
@@ -34,7 +34,11 @@ export const validateName = (name: string, targetElement?: HTMLElement) => {
 };
 
 export const replaceFileName = (name: string) => {
-    return name.replace(/\r\n|\r|\n|\u2028|\u2029|\t|\//g, "").substring(0, Constants.SIZE_TITLE);
+    if (name.indexOf("/") > -1) {
+        showMessage(window.siyuan.languages.fileNameRule);
+        name = name.replace(/\//g, "／");
+    }
+    return name.replace(/\r\n|\r|\n|\u2028|\u2029|\t|/g, "").substring(0, Constants.SIZE_TITLE);
 };
 
 export const replaceLocalPath = (name: string) => {
@@ -141,8 +145,7 @@ export const renameAsset = (assetPath: string) => {
             /// #if !MOBILE
             getAllModels().asset.forEach(item => {
                 if (item.path === assetPath) {
-                    item.path = response.data.newPath;
-                    item.parent.updateTitle(getDisplayName(response.data.newPath));
+                    item.update(response.data.newPath);
                 }
             });
             /// #endif

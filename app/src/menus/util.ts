@@ -3,7 +3,7 @@ import {ipcRenderer} from "electron";
 import * as path from "path";
 /// #endif
 import {fetchPost} from "../util/fetch";
-import {getAssetName, pathPosix, showFileInFolder} from "../util/pathName";
+import {getAssetName, pathPosix, useShell} from "../util/pathName";
 import {openFileById} from "../editor/util";
 import {Constants} from "../constants";
 import {openNewWindowById} from "../window/openNewWindow";
@@ -11,6 +11,7 @@ import {MenuItem} from "./Menu";
 import {App} from "../index";
 import {exportByMobile, isInAndroid, updateHotkeyTip} from "../protyle/util/compatibility";
 import {checkFold} from "../util/noRelyPCFunction";
+import {showMessage} from "../dialog/message";
 
 export const exportAsset = (src: string) => {
     return {
@@ -27,8 +28,34 @@ export const exportAsset = (src: string) => {
                 properties: ["showOverwriteConfirmation"],
             });
             if (!result.canceled) {
-                fetchPost("/api/file/copyFile", {src, dest: result.filePath});
+                fetchPost("/api/file/copyFile", {src, dest: result.filePath}, (response) => {
+                    if (response.code === 0) {
+                        showMessage(window.siyuan.languages.exported);
+                    }
+                });
             }
+            /// #endif
+        }
+    };
+};
+
+// 复制资源文件到系统剪贴板，在文件资源管理器中可粘贴为文件（仅 Windows、macOS 桌面端支持）
+export const copyAsset = (src: string) => {
+    return {
+        id: "copyFile",
+        label: window.siyuan.languages.copyFile,
+        icon: "iconCopy",
+        click: () => {
+            /// #if !BROWSER
+            fetchPost("/api/clipboard/writeFilePath", {path: src}, (response) => {
+                if (response.code === 0) {
+                    showMessage(window.siyuan.languages.copied);
+                } else {
+                    showMessage(response.msg || "", response.data?.closeTimeout ?? 5000, "error");
+                }
+            });
+            /// #else
+            showMessage("Copy as file is only supported in the Windows and macOS desktop app");
             /// #endif
         }
     };
@@ -67,7 +94,7 @@ export const openEditorTab = (app: App, ids: string[], notebookId?: string, path
         id: "insertBottom",
         icon: "iconLayoutBottom",
         label: window.siyuan.languages.insertBottom,
-        accelerator: ids.length === 1 ? "⇧" + window.siyuan.languages.click : "",
+        accelerator: ids.length === 1 ? "⇧⌘" + window.siyuan.languages.click : "",
         click: () => {
             if (notebookId) {
                 openFileById({
@@ -149,11 +176,11 @@ export const openEditorTab = (app: App, ids: string[], notebookId?: string, path
         label: window.siyuan.languages.showInFolder,
         click: () => {
             if (notebookId) {
-                showFileInFolder(path.join(window.siyuan.config.system.dataDir, notebookId, pathString));
+                useShell("showItemInFolder", path.join(window.siyuan.config.system.dataDir, notebookId, pathString));
             } else {
                 ids.forEach((id) => {
                     fetchPost("/api/block/getBlockInfo", {id}, (response) => {
-                        showFileInFolder(path.join(window.siyuan.config.system.dataDir, response.data.box, response.data.path));
+                        useShell("showItemInFolder", path.join(window.siyuan.config.system.dataDir, response.data.box, response.data.path));
                     });
                 });
             }
@@ -175,7 +202,6 @@ export const openEditorTab = (app: App, ids: string[], notebookId?: string, path
 export const copyPNGByLink = (link: string) => {
     if (isInAndroid()) {
         window.JSAndroid.writeImageClipboard(link);
-        return;
     } else {
         const canvas = document.createElement("canvas");
         const tempElement = document.createElement("img");

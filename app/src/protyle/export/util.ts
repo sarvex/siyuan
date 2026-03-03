@@ -11,8 +11,7 @@ import {Constants} from "../../constants";
 import {highlightRender} from "../render/highlightRender";
 import {processRender} from "../util/processCode";
 import {isIPhone, isSafari, openByMobile, setStorageVal} from "../util/compatibility";
-import {showFileInFolder} from "../../util/pathName";
-import {isPaidUser} from "../../util/needSubscribe";
+import {useShell} from "../../util/pathName";
 
 export const afterExport = (exportPath: string, msgId: string) => {
     /// #if !BROWSER
@@ -20,7 +19,7 @@ export const afterExport = (exportPath: string, msgId: string) => {
 <div class="fn__space"></div>
 <button class="b3-button b3-button--white">${window.siyuan.languages.showInFolder}</button>`, 6000, "info", msgId);
     document.querySelector(`#message [data-id="${msgId}"] button`).addEventListener("click", () => {
-        showFileInFolder(path.join(exportPath));
+        useShell("showItemInFolder", path.join(exportPath));
         hideMessage(msgId);
     });
     /// #endif
@@ -30,8 +29,8 @@ export const exportImage = (id: string) => {
     const exportDialog = new Dialog({
         title: window.siyuan.languages.exportAsImage,
         content: `<div class="b3-dialog__content" style="${isMobile() ? "padding:8px;" : ""};background-color: var(--b3-theme-background)">
-    <div style="${isMobile() ? "padding: 16px;margin: 8px 0" : "padding: 48px;margin: 8px 0"};" class="export-img">
-        <div class="protyle-wysiwyg${window.siyuan.config.editor.displayBookmarkIcon ? " protyle-wysiwyg--attr" : ""}"></div>
+    <div style="${isMobile() ? "margin: 8px 0" : "padding: 48px;margin: 8px 0"}" class="export-img">
+        <div ${isMobile() ? 'style="padding:8px"' : ""} class="protyle-wysiwyg${window.siyuan.config.editor.displayBookmarkIcon ? " protyle-wysiwyg--attr" : ""}"></div>
         <div class="export-img__watermark"></div>
     </div>
 </div>
@@ -59,18 +58,37 @@ export const exportImage = (id: string) => {
     btnsElement[0].addEventListener("click", () => {
         exportDialog.destroy();
     });
-    btnsElement[1].addEventListener("click", () => {
+    btnsElement[1].addEventListener("click", async () => {
         const msgId = showMessage(window.siyuan.languages.exporting, 0);
-        (exportDialog.element.querySelector(".b3-dialog__container") as HTMLElement).style.height = "";
+        const containerElement = exportDialog.element.querySelector(".b3-dialog__container") as HTMLElement;
+        containerElement.style.height = "";
+        /// #if MOBILE
+        containerElement.style.width = "100vw";
+        /// #endif
+        const contentElement = exportDialog.element.querySelector(".b3-dialog__content") as HTMLElement;
+        contentElement.style.overflow = "hidden";
         setStorageVal(Constants.LOCAL_EXPORTIMG, window.siyuan.storage[Constants.LOCAL_EXPORTIMG]);
+        const plantumlElements = previewElement.querySelectorAll("[data-subtype='plantuml']");
+        for (let i = 0; i < plantumlElements.length; i++) {
+            const objectElement = plantumlElements[i].querySelector("object");
+            if (objectElement) {
+                const res = await fetch(objectElement.getAttribute("data"));
+                const response = await res.text();
+                objectElement.insertAdjacentHTML("beforebegin", response as string);
+                objectElement.remove();
+            }
+        }
+        previewElement.querySelectorAll(".protyle-linenumber__rows span").forEach((item, index) => {
+            item.textContent = (index + 1).toString();
+        });
         setTimeout(() => {
             addScript("/stage/protyle/js/html-to-image.min.js?v=1.11.13", "protyleHtml2image").then(async () => {
                 let blob = await window.htmlToImage.toBlob(exportDialog.element.querySelector(".b3-dialog__content"));
                 if (isIPhone() || isSafari()) {
-                    await window.htmlToImage.toBlob(exportDialog.element.querySelector(".b3-dialog__content"));
-                    await window.htmlToImage.toBlob(exportDialog.element.querySelector(".b3-dialog__content"));
-                    await window.htmlToImage.toBlob(exportDialog.element.querySelector(".b3-dialog__content"));
-                    blob = await window.htmlToImage.toBlob(exportDialog.element.querySelector(".b3-dialog__content"));
+                    await window.htmlToImage.toBlob(contentElement);
+                    await window.htmlToImage.toBlob(contentElement);
+                    await window.htmlToImage.toBlob(contentElement);
+                    blob = await window.htmlToImage.toBlob(contentElement);
                 }
                 const formData = new FormData();
                 formData.append("file", blob, btnsElement[1].getAttribute("data-title"));
@@ -101,16 +119,9 @@ export const exportImage = (id: string) => {
     const watermarkElement = (exportDialog.element.querySelector("#watermark") as HTMLInputElement);
     watermarkElement.addEventListener("change", () => {
         window.siyuan.storage[Constants.LOCAL_EXPORTIMG].watermark = watermarkElement.checked;
-        if (watermarkElement.checked && !isPaidUser()) {
-            watermarkElement.checked = false;
-            showMessage(window.siyuan.languages._kernel[214]);
-        }
         updateWatermark();
     });
     const updateWatermark = () => {
-        if (!isPaidUser()) {
-            return;
-        }
         const watermarkPreviewElement = exportDialog.element.querySelector(".export-img__watermark") as HTMLElement;
         watermarkPreviewElement.innerHTML = "";
         if (watermarkElement.checked) {
@@ -138,18 +149,9 @@ export const exportImage = (id: string) => {
     const refreshPreview = (response: IWebSocketData) => {
         previewElement.innerHTML = response.data.content;
         previewElement.setAttribute("data-doc-type", response.data.type || "NodeDocument");
-        if (response.data.attrs.memo) {
-            previewElement.setAttribute("memo", response.data.attrs.memo);
-        }
-        if (response.data.attrs.name) {
-            previewElement.setAttribute("name", response.data.attrs.name);
-        }
-        if (response.data.attrs.bookmark) {
-            previewElement.setAttribute("bookmark", response.data.attrs.bookmark);
-        }
-        if (response.data.attrs.alias) {
-            previewElement.setAttribute("alias", response.data.attrs.alias);
-        }
+        Object.keys(response.data.attrs).forEach(key => {
+            previewElement.setAttribute(key, response.data.attrs[key]);
+        });
         previewElement.querySelectorAll(".code-block").forEach(item => {
             item.setAttribute("linewrap", "true");
         });

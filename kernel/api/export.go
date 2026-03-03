@@ -18,7 +18,9 @@ package api
 
 import (
 	"io"
+	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -28,10 +30,35 @@ import (
 	"github.com/88250/gulu"
 	"github.com/88250/lute/parse"
 	"github.com/gin-gonic/gin"
+	"github.com/mssola/useragent"
+	"github.com/siyuan-note/filelock"
 	"github.com/siyuan-note/logging"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
+
+func exportCodeBlock(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+
+	id := arg["id"].(string)
+	filePath, err := model.ExportCodeBlock(id)
+	if err != nil {
+		ret.Code = 1
+		ret.Msg = err.Error()
+		ret.Data = map[string]interface{}{"closeTimeout": 7000}
+		return
+	}
+
+	ret.Data = map[string]interface{}{
+		"path": filePath,
+	}
+}
 
 func exportAttributeView(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
@@ -379,6 +406,27 @@ func exportNotebookSY(c *gin.Context) {
 	}
 }
 
+func exportSYs(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+
+	idsArg := arg["ids"].([]interface{})
+	var ids []string
+	for _, id := range idsArg {
+		ids = append(ids, id.(string))
+	}
+
+	zipPath := model.ExportSYs(ids)
+	ret.Data = map[string]interface{}{
+		"zip": zipPath,
+	}
+}
+
 func exportSY(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)
@@ -389,10 +437,9 @@ func exportSY(c *gin.Context) {
 	}
 
 	id := arg["id"].(string)
-	name, zipPath := model.ExportSY(id)
+	zipPath := model.ExportSYs([]string{id})
 	ret.Data = map[string]interface{}{
-		"name": name,
-		"zip":  zipPath,
+		"zip": zipPath,
 	}
 }
 
@@ -425,7 +472,31 @@ func exportMdContent(c *gin.Context) {
 		yfm = arg["yfm"].(bool)
 	}
 
-	hPath, content := model.ExportMarkdownContent(id, refMode, embedMode, yfm)
+	fillCSSVar := false
+	if nil != arg["fillCSSVar"] {
+		fillCSSVar = arg["fillCSSVar"].(bool)
+	}
+
+	adjustHeadingLevel := false
+	if nil != arg["adjustHeadingLevel"] {
+		adjustHeadingLevel = arg["adjustHeadingLevel"].(bool)
+	}
+
+	imgTag := false
+	if nil != arg["imgTag"] {
+		imgTag = arg["imgTag"].(bool)
+	}
+
+	addTitle := model.Conf.Export.AddTitle
+	if nil != arg["addTitle"] {
+		if arg["addTitle"].(bool) {
+			addTitle = true
+		} else {
+			addTitle = false
+		}
+	}
+
+	hPath, content := model.ExportMarkdownContent(id, refMode, embedMode, yfm, fillCSSVar, adjustHeadingLevel, imgTag, addTitle)
 	ret.Data = map[string]interface{}{
 		"hPath":   hPath,
 		"content": content,
@@ -451,7 +522,7 @@ func exportDocx(c *gin.Context) {
 
 	fullPath, err := model.ExportDocx(id, savePath, removeAssets, merge)
 	if err != nil {
-		ret.Code = -1
+		ret.Code = 1
 		ret.Msg = err.Error()
 		ret.Data = map[string]interface{}{"closeTimeout": 7000}
 		return
@@ -472,6 +543,21 @@ func exportMdHTML(c *gin.Context) {
 
 	id := arg["id"].(string)
 	savePath := arg["savePath"].(string)
+
+	savePath = strings.TrimSpace(savePath)
+	if savePath == "" {
+		folderName := "htmlmd-" + id + "-" + util.CurrentTimeSecondsStr()
+		tmpDir := filepath.Join(util.TempDir, "export", folderName)
+		name, content := model.ExportMarkdownHTML(id, tmpDir, false, false)
+		ret.Data = map[string]interface{}{
+			"id":      id,
+			"name":    name,
+			"content": content,
+			"folder":  folderName,
+		}
+		return
+	}
+
 	name, content := model.ExportMarkdownHTML(id, savePath, false, false)
 	ret.Data = map[string]interface{}{
 		"id":      id,
@@ -507,6 +593,62 @@ func exportTempContent(c *gin.Context) {
 	url := path.Join("/export/temp/", filepath.Base(p))
 	ret.Data = map[string]interface{}{
 		"url": "http://" + util.LocalHost + ":" + util.ServerPort + url,
+	}
+}
+
+func exportBrowserHTML(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+
+	folder := arg["folder"].(string)
+	htmlContent := arg["html"].(string)
+	name := arg["name"].(string)
+
+	tmpDir := filepath.Join(util.TempDir, "export", folder)
+
+	htmlPath := filepath.Join(tmpDir, "index.html")
+	if err := filelock.WriteFile(htmlPath, []byte(htmlContent)); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		ret.Data = nil
+		return
+	}
+
+	zipFileName := util.FilterFileName(name) + ".zip"
+	zipPath := filepath.Join(util.TempDir, "export", zipFileName)
+	zip, err := gulu.Zip.Create(zipPath)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		ret.Data = nil
+		return
+	}
+
+	err = zip.AddDirectory("", tmpDir, func(string) {})
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		ret.Data = nil
+		return
+	}
+
+	if err = zip.Close(); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		ret.Data = nil
+		return
+	}
+
+	os.RemoveAll(tmpDir)
+
+	zipURL := "/export/" + url.PathEscape(filepath.Base(zipPath))
+	ret.Data = map[string]interface{}{
+		"zip": zipURL,
 	}
 }
 
@@ -573,6 +715,21 @@ func exportHTML(c *gin.Context) {
 	if nil != arg["merge"] {
 		merge = arg["merge"].(bool)
 	}
+
+	savePath = strings.TrimSpace(savePath)
+	if savePath == "" {
+		folderName := "html-" + id + "-" + util.CurrentTimeSecondsStr()
+		tmpDir := filepath.Join(util.TempDir, "export", folderName)
+		name, content, _ := model.ExportHTML(id, tmpDir, pdf, false, keepFold, merge)
+		ret.Data = map[string]interface{}{
+			"id":      id,
+			"name":    name,
+			"content": content,
+			"folder":  folderName,
+		}
+		return
+	}
+
 	name, content, _ := model.ExportHTML(id, savePath, pdf, false, keepFold, merge)
 	ret.Data = map[string]interface{}{
 		"id":      id,
@@ -616,9 +773,22 @@ func exportPreview(c *gin.Context) {
 	}
 
 	id := arg["id"].(string)
-	stdHTML := model.Preview(id)
+
+	userAgentStr := c.GetHeader("User-Agent")
+	fillCSSVar := true
+	if userAgentStr != "" {
+		ua := useragent.New(userAgentStr)
+		name, _ := ua.Browser()
+		// Chrome、Edge、SiYuan 桌面端不需要替换 CSS 变量
+		if !ua.Mobile() && (name == "Chrome" || name == "Edge" || strings.Contains(userAgentStr, "Electron") || strings.Contains(userAgentStr, "SiYuan/")) {
+			fillCSSVar = false
+		}
+	}
+
+	stdHTML := model.ExportPreview(id, fillCSSVar)
 	ret.Data = map[string]interface{}{
-		"html": stdHTML,
+		"html":       stdHTML,
+		"fillCSSVar": fillCSSVar,
 	}
 }
 
@@ -653,7 +823,13 @@ func exportAsFile(c *gin.Context) {
 	}
 
 	name := "file-" + file.Filename
+	typ := form.Value["type"][0]
+	exts, _ := mime.ExtensionsByType(typ)
+	if 0 < len(exts) && filepath.Ext(name) != exts[0] {
+		name += exts[0]
+	}
 	name = util.FilterFileName(name)
+	name = strings.ReplaceAll(name, "#", "_")
 	tmpDir := filepath.Join(util.TempDir, "export")
 	if err = os.MkdirAll(tmpDir, 0755); err != nil {
 		logging.LogErrorf("export as file failed: %s", err)
@@ -672,7 +848,6 @@ func exportAsFile(c *gin.Context) {
 	}
 
 	ret.Data = map[string]interface{}{
-		"name": name,
 		"file": path.Join("/export/", name),
 	}
 }

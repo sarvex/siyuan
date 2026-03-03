@@ -26,12 +26,35 @@ import (
 
 	"github.com/88250/gulu"
 	"github.com/88250/lute"
+	"github.com/88250/lute/html"
 	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/filelock"
 	"github.com/siyuan-note/logging"
 	"github.com/siyuan-note/siyuan/kernel/conf"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
+
+func clearTempFiles(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	model.ClearTempFiles()
+}
+
+func vacuumDataIndex(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	model.VacuumDataIndex()
+}
+
+func rebuildDataIndex(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	model.FullReindex()
+}
 
 func addMicrosoftDefenderExclusion(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
@@ -58,13 +81,6 @@ func ignoreAddMicrosoftDefenderExclusion(c *gin.Context) {
 
 	model.Conf.System.MicrosoftDefenderExcluded = true
 	model.Conf.Save()
-}
-
-func reloadUI(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	util.ReloadUI()
 }
 
 func getWorkspaceInfo(c *gin.Context) {
@@ -172,8 +188,19 @@ func getEmojiConf(c *gin.Context) {
 		} else {
 			for _, customEmoji := range customEmojis {
 				name := customEmoji.Name()
-				if strings.HasPrefix(name, ".") || strings.Contains(name, "<") {
+				if strings.HasPrefix(name, ".") {
 					continue
+				}
+
+				if !util.IsValidUploadFileName(html.UnescapeString(name)) {
+					emojiFullName := filepath.Join(customConfDir, name)
+					name = util.FilterUploadEmojiFileName(name)
+					fullPathFilteredName := filepath.Join(customConfDir, name)
+					// XSS through emoji name https://github.com/siyuan-note/siyuan/issues/15034
+					logging.LogWarnf("renaming invalid custom emoji file [%s] to [%s]", name, fullPathFilteredName)
+					if removeErr := filelock.Rename(emojiFullName, fullPathFilteredName); nil != removeErr {
+						logging.LogErrorf("renaming invalid custom emoji file to [%s] failed: %s", fullPathFilteredName, removeErr)
+					}
 				}
 
 				if customEmoji.IsDir() {
@@ -189,12 +216,22 @@ func getEmojiConf(c *gin.Context) {
 							continue
 						}
 
-						name = subCustomEmoji.Name()
-						if strings.HasPrefix(name, ".") || strings.Contains(name, "<") {
+						subName := subCustomEmoji.Name()
+						if strings.HasPrefix(subName, ".") {
 							continue
 						}
 
-						addCustomEmoji(customEmoji.Name()+"/"+name, &items)
+						if !util.IsValidUploadFileName(html.UnescapeString(subName)) {
+							emojiFullName := filepath.Join(customConfDir, name, subName)
+							fullPathFilteredName := filepath.Join(customConfDir, name, util.FilterUploadEmojiFileName(subName))
+							// XSS through emoji name https://github.com/siyuan-note/siyuan/issues/15034
+							logging.LogWarnf("renaming invalid custom emoji file [%s] to [%s]", subName, fullPathFilteredName)
+							if removeErr := filelock.Rename(emojiFullName, fullPathFilteredName); nil != removeErr {
+								logging.LogErrorf("renaming invalid custom emoji file to [%s] failed: %s", fullPathFilteredName, removeErr)
+							}
+						}
+
+						addCustomEmoji(name+"/"+subName, &items)
 					}
 					continue
 				}
@@ -566,6 +603,12 @@ func setAccessAuthCode(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)
 
+	if util.ContainerDocker == util.Container {
+		ret.Code = -1
+		ret.Msg = "access auth code cannot be set in Docker container"
+		return
+	}
+
 	arg, ok := util.JsonArg(c, ret)
 	if !ok {
 		return
@@ -677,7 +720,7 @@ func setNetworkServe(c *gin.Context) {
 	time.Sleep(time.Second * 3)
 }
 
-func setGoogleAnalytics(c *gin.Context) {
+func setNetworkServeTLS(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)
 
@@ -686,9 +729,162 @@ func setGoogleAnalytics(c *gin.Context) {
 		return
 	}
 
-	googleAnalytics := arg["googleAnalytics"].(bool)
-	model.Conf.System.DisableGoogleAnalytics = !googleAnalytics
+	networkServeTLS := arg["networkServeTLS"].(bool)
+	model.Conf.System.NetworkServeTLS = networkServeTLS
 	model.Conf.Save()
+
+	util.PushMsg(model.Conf.Language(42), 1000*15)
+	time.Sleep(time.Second * 3)
+}
+
+func exportTLSCACert(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	caCertPath := filepath.Join(util.ConfDir, util.TLSCACertFilename)
+	if !gulu.File.IsExist(caCertPath) {
+		ret.Code = -1
+		ret.Msg = "CA certificate not found"
+		return
+	}
+
+	tmpDir := filepath.Join(util.TempDir, "export")
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+
+	exportPath := filepath.Join(tmpDir, util.TLSCACertFilename)
+	if err := gulu.File.CopyFile(caCertPath, exportPath); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+
+	ret.Data = map[string]interface{}{
+		"path": "/export/" + util.TLSCACertFilename,
+	}
+}
+
+func exportTLSCABundle(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	caCertPath := filepath.Join(util.ConfDir, util.TLSCACertFilename)
+	caKeyPath := filepath.Join(util.ConfDir, util.TLSCAKeyFilename)
+
+	if !gulu.File.IsExist(caCertPath) || !gulu.File.IsExist(caKeyPath) {
+		ret.Code = -1
+		ret.Msg = "CA certificate not found, please enable TLS first"
+		return
+	}
+
+	tmpDir := filepath.Join(util.TempDir, "export", "ca-bundle")
+	os.RemoveAll(tmpDir)
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := gulu.File.CopyFile(caCertPath, filepath.Join(tmpDir, util.TLSCACertFilename)); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	if err := gulu.File.CopyFile(caKeyPath, filepath.Join(tmpDir, util.TLSCAKeyFilename)); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+
+	zipPath := filepath.Join(util.TempDir, "export", "ca-bundle.zip")
+	zipFile, err := gulu.Zip.Create(zipPath)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+
+	if err := zipFile.AddDirectory("", tmpDir); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+
+	if err := zipFile.Close(); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+
+	ret.Data = map[string]interface{}{
+		"path": "/export/ca-bundle.zip",
+	}
+}
+
+func importTLSCABundle(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	file, err := c.FormFile("file")
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = "file is required: " + err.Error()
+		return
+	}
+
+	tmpDir := filepath.Join(util.TempDir, "import")
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+
+	tmpZipPath := filepath.Join(tmpDir, "ca-bundle.zip")
+	if err := c.SaveUploadedFile(file, tmpZipPath); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+	defer os.Remove(tmpZipPath)
+
+	extractDir := filepath.Join(tmpDir, "ca-bundle")
+	os.RemoveAll(extractDir)
+	if err := gulu.Zip.Unzip(tmpZipPath, extractDir); err != nil {
+		ret.Code = -1
+		ret.Msg = "failed to extract zip file: " + err.Error()
+		return
+	}
+	defer os.RemoveAll(extractDir)
+
+	caCertPath := filepath.Join(extractDir, util.TLSCACertFilename)
+	caCertPEM, err := os.ReadFile(caCertPath)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = "ca.crt not found in zip file"
+		return
+	}
+
+	caKeyPath := filepath.Join(extractDir, util.TLSCAKeyFilename)
+	caKeyPEM, err := os.ReadFile(caKeyPath)
+	if err != nil {
+		ret.Code = -1
+		ret.Msg = "ca.key not found in zip file"
+		return
+	}
+
+	if err := util.ImportCABundle(string(caCertPEM), string(caKeyPEM)); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
+
+	ret.Data = map[string]interface{}{
+		"msg": "CA bundle imported successfully. Please restart to apply changes.",
+	}
 }
 
 func setAutoLaunch(c *gin.Context) {
@@ -769,7 +965,13 @@ func exit(c *gin.Context) {
 		execInstallPkg = int(execInstallPkgArg.(float64))
 	}
 
-	exitCode := model.Close(force, true, execInstallPkg)
+	setCurrentWorkspaceArg := arg["setCurrentWorkspace"]
+	setCurrentWorkspace := true
+	if nil != setCurrentWorkspaceArg {
+		setCurrentWorkspace = setCurrentWorkspaceArg.(bool)
+	}
+
+	exitCode := model.Close(force, setCurrentWorkspace, execInstallPkg)
 	ret.Code = exitCode
 	switch exitCode {
 	case 0:

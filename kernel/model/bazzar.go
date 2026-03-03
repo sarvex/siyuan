@@ -19,7 +19,6 @@ package model
 import (
 	"errors"
 	"fmt"
-	"github.com/siyuan-note/siyuan/kernel/task"
 	"path"
 	"path/filepath"
 	"strings"
@@ -27,8 +26,10 @@ import (
 	"time"
 
 	"github.com/88250/gulu"
+	"github.com/emirpasic/gods/sets/hashset"
 	"github.com/siyuan-note/logging"
 	"github.com/siyuan-note/siyuan/kernel/bazaar"
+	"github.com/siyuan-note/siyuan/kernel/task"
 	"github.com/siyuan-note/siyuan/kernel/util"
 	"golang.org/x/mod/semver"
 )
@@ -119,6 +120,7 @@ func UpdatedPackages(frontend string) (plugins []*bazaar.Plugin, widgets []*baza
 			if plugin.Outdated {
 				plugins = append(plugins, plugin)
 			}
+			plugin.PreferredReadme = "" // 清空这个字段，前端会请求在线的 README
 		}
 	}()
 
@@ -129,6 +131,7 @@ func UpdatedPackages(frontend string) (plugins []*bazaar.Plugin, widgets []*baza
 			if widget.Outdated {
 				widgets = append(widgets, widget)
 			}
+			widget.PreferredReadme = ""
 		}
 	}()
 
@@ -139,6 +142,7 @@ func UpdatedPackages(frontend string) (plugins []*bazaar.Plugin, widgets []*baza
 			if icon.Outdated {
 				icons = append(icons, icon)
 			}
+			icon.PreferredReadme = ""
 		}
 	}()
 
@@ -149,6 +153,7 @@ func UpdatedPackages(frontend string) (plugins []*bazaar.Plugin, widgets []*baza
 			if theme.Outdated {
 				themes = append(themes, theme)
 			}
+			theme.PreferredReadme = ""
 		}
 	}()
 
@@ -159,6 +164,7 @@ func UpdatedPackages(frontend string) (plugins []*bazaar.Plugin, widgets []*baza
 			if template.Outdated {
 				templates = append(templates, template)
 			}
+			template.PreferredReadme = ""
 		}
 	}()
 
@@ -200,14 +206,19 @@ func BazaarPlugins(frontend, keyword string) (plugins []*bazaar.Plugin) {
 			if pluginConf, err := bazaar.PluginJSON(plugin.Name); err == nil && nil != plugin {
 				plugin.Outdated = 0 > semver.Compare("v"+pluginConf.Version, "v"+plugin.Version)
 			}
+		} else {
+			plugin.Outdated = false
 		}
 	}
 	return
 }
 
 func filterPlugins(plugins []*bazaar.Plugin, keyword string) (ret []*bazaar.Plugin) {
-	ret = []*bazaar.Plugin{}
 	keywords := getSearchKeywords(keyword)
+	if 0 == len(keywords) {
+		return plugins
+	}
+	ret = []*bazaar.Plugin{}
 	for _, plugin := range plugins {
 		if matchPackage(keywords, plugin.Package) {
 			ret = append(ret, plugin)
@@ -217,7 +228,7 @@ func filterPlugins(plugins []*bazaar.Plugin, keyword string) (ret []*bazaar.Plug
 }
 
 func InstalledPlugins(frontend, keyword string) (plugins []*bazaar.Plugin) {
-	plugins = bazaar.InstalledPlugins(frontend, true)
+	plugins = bazaar.InstalledPlugins(frontend)
 	plugins = filterPlugins(plugins, keyword)
 	petals := getPetals()
 	for _, plugin := range plugins {
@@ -254,6 +265,9 @@ func UninstallBazaarPlugin(pluginName, frontend string) error {
 	}
 	petals = tmp
 	savePetals(petals)
+
+	uninstallPluginSet := hashset.New(pluginName)
+	PushReloadPlugin(nil, nil, nil, uninstallPluginSet, "")
 	return nil
 }
 
@@ -266,14 +280,19 @@ func BazaarWidgets(keyword string) (widgets []*bazaar.Widget) {
 			if widgetConf, err := bazaar.WidgetJSON(widget.Name); err == nil && nil != widget {
 				widget.Outdated = 0 > semver.Compare("v"+widgetConf.Version, "v"+widget.Version)
 			}
+		} else {
+			widget.Outdated = false
 		}
 	}
 	return
 }
 
 func filterWidgets(widgets []*bazaar.Widget, keyword string) (ret []*bazaar.Widget) {
-	ret = []*bazaar.Widget{}
 	keywords := getSearchKeywords(keyword)
+	if 0 == len(keywords) {
+		return widgets
+	}
+	ret = []*bazaar.Widget{}
 	for _, w := range widgets {
 		if matchPackage(keywords, w.Package) {
 			ret = append(ret, w)
@@ -324,8 +343,11 @@ func BazaarIcons(keyword string) (icons []*bazaar.Icon) {
 }
 
 func filterIcons(icons []*bazaar.Icon, keyword string) (ret []*bazaar.Icon) {
-	ret = []*bazaar.Icon{}
 	keywords := getSearchKeywords(keyword)
+	if 0 == len(keywords) {
+		return icons
+	}
+	ret = []*bazaar.Icon{}
 	for _, i := range icons {
 		if matchPackage(keywords, i.Package) {
 			ret = append(ret, i)
@@ -352,6 +374,7 @@ func InstallBazaarIcon(repoURL, repoHash, iconName string) error {
 	Conf.Appearance.Icon = iconName
 	Conf.Save()
 	InitAppearance()
+	util.BroadcastByType("main", "setAppearance", 0, "", Conf.Appearance)
 	return nil
 }
 
@@ -386,8 +409,11 @@ func BazaarThemes(keyword string) (ret []*bazaar.Theme) {
 }
 
 func filterThemes(themes []*bazaar.Theme, keyword string) (ret []*bazaar.Theme) {
-	ret = []*bazaar.Theme{}
 	keywords := getSearchKeywords(keyword)
+	if 0 == len(keywords) {
+		return themes
+	}
+	ret = []*bazaar.Theme{}
 	for _, t := range themes {
 		if matchPackage(keywords, t.Package) {
 			ret = append(ret, t)
@@ -427,6 +453,7 @@ func InstallBazaarTheme(repoURL, repoHash, themeName string, mode int, update bo
 	}
 
 	InitAppearance()
+	util.BroadcastByType("main", "setAppearance", 0, "", Conf.Appearance)
 	return nil
 }
 
@@ -452,14 +479,19 @@ func BazaarTemplates(keyword string) (templates []*bazaar.Template) {
 			if templateConf, err := bazaar.TemplateJSON(template.Name); err == nil && nil != templateConf {
 				template.Outdated = 0 > semver.Compare("v"+templateConf.Version, "v"+template.Version)
 			}
+		} else {
+			template.Outdated = false
 		}
 	}
 	return
 }
 
 func filterTemplates(templates []*bazaar.Template, keyword string) (ret []*bazaar.Template) {
-	ret = []*bazaar.Template{}
 	keywords := getSearchKeywords(keyword)
+	if 0 == len(keywords) {
+		return templates
+	}
+	ret = []*bazaar.Template{}
 	for _, t := range templates {
 		if matchPackage(keywords, t.Package) {
 			ret = append(ret, t)
@@ -497,34 +529,41 @@ func matchPackage(keywords []string, pkg *bazaar.Package) bool {
 		return true
 	}
 
-	if nil == pkg || nil == pkg.DisplayName || nil == pkg.Description {
+	if nil == pkg {
 		return false
 	}
 
-	hits := map[string]bool{}
-	for _, keyword := range keywords {
-		if strings.Contains(strings.ToLower(pkg.DisplayName.Default), keyword) ||
-			strings.Contains(strings.ToLower(pkg.DisplayName.ZhCN), keyword) ||
-			strings.Contains(strings.ToLower(pkg.DisplayName.ZhCHT), keyword) ||
-			strings.Contains(strings.ToLower(pkg.DisplayName.EnUS), keyword) ||
-			strings.Contains(strings.ToLower(pkg.Description.Default), keyword) ||
-			strings.Contains(strings.ToLower(pkg.Description.ZhCN), keyword) ||
-			strings.Contains(strings.ToLower(pkg.Description.ZhCHT), keyword) ||
-			strings.Contains(strings.ToLower(pkg.Description.EnUS), keyword) ||
-			strings.Contains(strings.ToLower(path.Base(pkg.RepoURL)), keyword) ||
-			strings.Contains(strings.ToLower(pkg.Author), keyword) {
-			hits[keyword] = true
-			continue
-		}
-
-		for _, pkgKeyword := range pkg.Keywords {
-			if strings.Contains(strings.ToLower(pkgKeyword), keyword) {
-				hits[keyword] = true
-				break
-			}
+	for _, kw := range keywords {
+		if !packageContainsKeyword(pkg, kw) {
+			return false
 		}
 	}
-	return len(hits) == len(keywords)
+
+	// 全部关键词匹配
+	return true
+}
+
+func packageContainsKeyword(pkg *bazaar.Package, kw string) bool {
+	if strings.Contains(strings.ToLower(path.Base(pkg.RepoURL)), kw) ||
+		strings.Contains(strings.ToLower(pkg.Author), kw) {
+		return true
+	}
+	for _, s := range pkg.DisplayName {
+		if strings.Contains(strings.ToLower(s), kw) {
+			return true
+		}
+	}
+	for _, s := range pkg.Description {
+		if strings.Contains(strings.ToLower(s), kw) {
+			return true
+		}
+	}
+	for _, s := range pkg.Keywords {
+		if strings.Contains(strings.ToLower(s), kw) {
+			return true
+		}
+	}
+	return false
 }
 
 func getSearchKeywords(query string) (ret []string) {

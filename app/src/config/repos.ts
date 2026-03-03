@@ -6,12 +6,11 @@ import {processSync} from "../dialog/processSystem";
 import {getCloudURL} from "./util/about";
 import {openByMobile} from "../protyle/util/compatibility";
 import {confirmDialog} from "../dialog/confirmDialog";
-import {isKernelInMobile} from "../util/functions";
 
 const renderProvider = (provider: number) => {
     if (provider === 0) {
         if (needSubscribe("")) {
-            return `<div class="b3-label b3-label--inner">${window.siyuan.config.system.container === "ios" ? window.siyuan.languages._kernel[122] : window.siyuan.languages._kernel[29].replace("${url}", getCloudURL("subscribe/siyuan"))}</div>
+            return `<div class="b3-label b3-label--inner">${window.siyuan.config.system.container === "ios" ? window.siyuan.languages._kernel[122] : window.siyuan.languages._kernel[29].replaceAll("${accountServer}", getCloudURL(""))}</div>
 <div class="b3-label b3-label--inner">
     ${window.siyuan.languages.cloudIntro1}
     <div class="b3-label__text">
@@ -41,7 +40,13 @@ const renderProvider = (provider: number) => {
 </div>`;
     }
     if (!isPaidUser()) {
-        return `<div class="b3-label b3-label--inner">${window.siyuan.languages["_kernel"][214]}</div>`;
+        return `<div>
+    ${window.siyuan.languages["_kernel"][214].replaceAll("${accountServer}", getCloudURL(""))}
+</div>
+<div class="ft__error${provider == 4 ? "" : " fn__none"}">
+    <div class="fn__hr--b"></div>
+    ${window.siyuan.languages.mobileNotSupport}
+</div>`;
     }
     if (provider === 2) {
         return `<div class="b3-label b3-label--inner">
@@ -180,16 +185,11 @@ const renderProvider = (provider: number) => {
     </button>
 </div>`;
     } else if (provider === 4) {
-        if (isKernelInMobile()) {
-            return `<div class="b3-label b3-label--inner">
-    ${window.siyuan.languages.syncThirdPartyProviderLocalIntro}
-    <div class="fn__hr"></div>
-    <em>${window.siyuan.languages.proFeature}</em>
-    <div class="fn__hr"></div>
-    ${window.siyuan.languages.deviceNotSupport}
-</div>`;
-        }
         return `<div class="b3-label b3-label--inner">
+    <div class="ft__error">
+        ${window.siyuan.languages.mobileNotSupport}
+    </div>
+    <div class="fn__hr"></div>
     ${window.siyuan.languages.syncThirdPartyProviderLocalIntro}
     <div class="fn__hr"></div>
     <em>${window.siyuan.languages.proFeature}</em>
@@ -424,7 +424,7 @@ export const repos = {
         <option value="0" ${window.siyuan.config.sync.provider === 0 ? "selected" : ""}>SiYuan</option>
         <option value="2" ${window.siyuan.config.sync.provider === 2 ? "selected" : ""}>S3</option>
         <option value="3" ${window.siyuan.config.sync.provider === 3 ? "selected" : ""}>WebDAV</option>
-        <option value="4" ${window.siyuan.config.sync.provider === 4 ? "selected" : ""}>${window.siyuan.languages.localFileSystem}</option>
+        <option class="${!["std", "docker"].includes(window.siyuan.config.system.container) ? "fn__none" : ""}" value="4" ${window.siyuan.config.sync.provider === 4 ? "selected" : ""}>${window.siyuan.languages.localFileSystem}</option>
     </select>
 </div>
 <div id="syncProviderPanel" class="b3-label">
